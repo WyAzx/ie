@@ -105,8 +105,8 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-.data/
-.data_before/
-.data_processed/
-.save_models/
-.results/
+.data/*
+.data_before/*
+.data_processed/*
+.save_models/*
+.results/*

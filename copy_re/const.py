@@ -65,7 +65,7 @@ class Config:
             self.runner_path = os.path.join(model_home, runner)
         else:
             print('Config file must be provided.')
-            raise
+            raise ValueError
 
         data_home = os.path.join(home, 'data', DataSet.name)
         if DataSet.name == DataSet.NYT:

@@ -224,9 +224,9 @@ def is_multi_label(triples, is_relation_first=False):
     if is_normal_triple(triples, is_relation_first):
         return False
     if is_relation_first:
-        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) / 3)]
+        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) // 3)]
     else:
-        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) / 3)]
+        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) // 3)]
     # if is multi label, then, at least one entity pair appeared more than once
     return len(entity_pair) != len(set(entity_pair))
 
@@ -256,9 +256,9 @@ def is_over_lapping(triples, is_relation_first=False):
     if is_normal_triple(triples, is_relation_first):
         return False
     if is_relation_first:
-        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) / 3)]
+        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) // 3)]
     else:
-        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) / 3)]
+        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) // 3)]
     # remove the same entity_pair, then, if one entity appear more than once, it's overlapping
     entity_pair = set(entity_pair)
     entities = []
