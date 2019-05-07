@@ -121,7 +121,8 @@ class Encoder:
 class Decoder:
     def __init__(self, decoder_output_max_length, embedding_table, encoder, config):
         self.config = config
-        self.decoder_cell_number = self.config.decoder_output_max_length // 3
+        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        self.decoder_cell_number = self.config.decoder_output_max_length // 5
         self.embedding_table = embedding_table
         self.decoder_output_max_length = decoder_output_max_length
 
@@ -249,8 +250,8 @@ class Decoder:
     def get_prob(self, probs, indexes):
         depth = probs.get_shape()[-1]
         one_hot = tf.one_hot(indexes, depth)
-        probs = tf.reduce_sum(probs * one_hot, axis=1)
-        return probs
+        probs_ = tf.reduce_sum(probs * one_hot, axis=1)
+        return probs_
 
     def _loss(self):
         logging.info('Calculating loss')
@@ -261,7 +262,17 @@ class Decoder:
     def _optimize(self):
         logging.info('Optimizing')
         learning_rate = self.config.learning_rate
-        self.opt = tf.train.AdamOptimizer(learning_rate).minimize(self.losses)
+        # self.opt = tf.train.AdamOptimizer(learning_rate).minimize(self.losses)
+        tvars = tf.trainable_variables()
+        gradients = tf.gradients(self.losses, tvars, aggregation_method=tf.AggregationMethod.EXPERIMENTAL_TREE)
+        # Clip the gradients
+        with tf.device("/gpu:0"):
+            grads, global_norm = tf.clip_by_global_norm(gradients, 2.0)
+        optimizer = tf.train.AdagradOptimizer(learning_rate, initial_accumulator_value=0.1)
+        with tf.device("/gpu:0"):
+            self.opt = optimizer.apply_gradients(zip(grads, tvars), global_step=self.global_step,
+                                                       name='train_step')
+        logger.info('Finished OPT')
 
     def update(self, data, sess):
         feed_dict = {self.input_sentence_length: data.input_sentence_length,
@@ -318,8 +329,8 @@ class OneDecoder(Decoder):
             with tf.variable_scope('rnn'):
                 inputs = tf.nn.embedding_lookup(go, tf.zeros(shape=[self.config.batch_size], dtype=tf.int64))
                 decode_state = self.encoder.state
-                copy_history = tf.zeros(shape=[self.config.batch_size, self.config.max_sentence_length],
-                                        dtype=tf.float32)
+                #copy_history = tf.zeros(shape=[self.config.batch_size, self.config.max_sentence_length],
+                 #                       dtype=tf.float32)
                 logger.debug('Decoder: cell_num_units %s' % str(self.cell_num_units))
                 logger.debug('Decoder: state shape %s' % str(np.shape(decode_state)))
                 for i in range(self.config.decoder_output_max_length):
@@ -327,10 +338,11 @@ class OneDecoder(Decoder):
                         self.decode_cell.name, i + 1, self.config.decoder_output_max_length))
                     if i > 0:
                         tf.get_variable_scope().reuse_variables()
-                    if i % 3 == 1 or i % 3 == 0:
-                        c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
-                    if i % 3 == 2:
-                        c_mask = tf.concat([c_mask, mask_eos], axis=1)
+                    # if i % 3 == 1 or i % 3 == 0:
+                    #     c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
+                    # if i % 3 == 2:
+                    #     c_mask = tf.concat([c_mask, mask_eos], axis=1)
+                    c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
 
                     if self.config.cell_name == 'gru':
                         decode_state_h = decode_state
@@ -366,10 +378,10 @@ class OneDecoder(Decoder):
                     logger.debug('Decoder: predict shape %s' % str(predict.get_shape()))
 
                     # select action
-                    if i % 3 == 2 or i % 3 == 1:
+                    if i % 5 != 0:
                         action_logits = copy_logits
                         action_probs = copy
-                        copy_history += copy_logits_
+                        # copy_history += copy_logits_
                     else:
                         action_logits = predict_logits
                         action_probs = predict
@@ -382,20 +394,20 @@ class OneDecoder(Decoder):
                     probs_by_time.append(probs)
 
                     # look up the embedding of the copied word or selected relation
-                    if i % 3 == 2 or i % 3 == 1:
+                    if i % 5 != 0:
                         inputs = tf.nn.embedding_lookup(sentence_eos_embedding,
                                                         picked_actions + self.batch_bias4copy)
                     else:
                         inputs = tf.nn.embedding_lookup(relations_eos_embedding,
                                                         picked_actions + self.batch_bias4predict)
 
-                    if i % 3 == 1:  # mask the already copied position
-                        #  in every triple, one position should be copied at most once.
-                        #  use mask to mask the already copied position, but eos should not be masked
-                        copy_position_one_hot = tf.cast(tf.one_hot(picked_actions, self.config.max_sentence_length + 1),
-                                                        tf.float32)
-                        copy_position_one_hot = copy_position_one_hot[:, :-1]  # remove the mask of eos
-                        c_mask = mask_only_copy * (1. - copy_position_one_hot)
+                    # if i % 3 == 1:  # mask the already copied position
+                    #     #  in every triple, one position should be copied at most once.
+                    #     #  use mask to mask the already copied position, but eos should not be masked
+                    #     copy_position_one_hot = tf.cast(tf.one_hot(picked_actions, self.config.max_sentence_length + 1),
+                    #                                     tf.float32)
+                    #     copy_position_one_hot = copy_position_one_hot[:, :-1]  # remove the mask of eos
+                    #     c_mask = mask_only_copy * (1. - copy_position_one_hot)
 
             self.actions_by_time = tf.stack(actions_by_time, axis=1)
             self.probs_by_time = tf.stack(probs_by_time, axis=1)
@@ -456,14 +468,16 @@ class MultiDecoder(Decoder):
                                         tf.reduce_mean((self.encoder.state[1], previous_state[1]), axis=0))
                     with tf.variable_scope('decoder_%d' % cell_idx):
                         logger.debug('Decoder: state shape %s' % str(np.shape(decode_state)))
-                        for t in range(3):  # predict 3 elements of a triple
+                        for t in range(5):  # predict 3 elements of a triple
                             logger.info('%s Decoding of %d-%d/%d' % (
                                 self.decode_cell[cell_idx].name, t + 1, cell_idx + 1, self.decoder_cell_number))
-                            if t > 0: tf.get_variable_scope().reuse_variables()
-                            if t == 0 or t == 1:
-                                c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
-                            else:
-                                c_mask = tf.concat([c_mask, mask_eos], axis=1)
+                            if t > 0:
+                                tf.get_variable_scope().reuse_variables()
+                            # if t == 0 or t == 1:
+                            #     c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
+                            # else:
+                            #     c_mask = tf.concat([c_mask, mask_eos], axis=1)
+                            c_mask = tf.concat([mask_only_copy, mask_eos], axis=1)
 
                             if self.config.cell_name == 'gru':
                                 decode_state_h = decode_state
@@ -497,7 +511,7 @@ class MultiDecoder(Decoder):
                             logger.debug('Decoder: predict shape %s' % str(predict.get_shape()))
 
                             # select action
-                            if t == 2 or t == 1:
+                            if t != 0:
                                 action_logits = copy_logits
                                 action_probs = copy
                             else:
@@ -508,25 +522,25 @@ class MultiDecoder(Decoder):
                             picked_actions = max_action
                             actions_by_time.append(picked_actions)
 
-                            probs = self.get_prob(action_probs, sparse_standard_outputs_by_time[3 * cell_idx + t])
+                            probs = self.get_prob(action_probs, sparse_standard_outputs_by_time[5 * cell_idx + t])
                             probs_by_time.append(probs)
 
                             # look up the embedding of the copied word or selected relation
-                            if t == 2 or t == 1:
+                            if t != 0:
                                 inputs = tf.nn.embedding_lookup(sentence_eos_embedding,
                                                                 picked_actions + self.batch_bias4copy)
                             else:
                                 inputs = tf.nn.embedding_lookup(relations_eos_embedding,
                                                                 picked_actions + self.batch_bias4predict)
 
-                            if t == 1:  # mask the already copied position
-                                #  in every triple, one position should be copied at most once.
-                                #  use mask to mask the already copied position, but eos should not be masked
-                                copy_position_one_hot = tf.cast(
-                                    tf.one_hot(picked_actions, self.config.max_sentence_length + 1),
-                                    tf.float32)
-                                copy_position_one_hot = copy_position_one_hot[:, :-1]  # remove the mask of eos
-                                c_mask = mask_only_copy * (1. - copy_position_one_hot)
+                            # if t == 1:  # mask the already copied position
+                            #     #  in every triple, one position should be copied at most once.
+                            #     #  use mask to mask the already copied position, but eos should not be masked
+                            #     copy_position_one_hot = tf.cast(
+                            #         tf.one_hot(picked_actions, self.config.max_sentence_length + 1),
+                            #         tf.float32)
+                            #     copy_position_one_hot = copy_position_one_hot[:, :-1]  # remove the mask of eos
+                            #     c_mask = mask_only_copy * (1. - copy_position_one_hot)
 
                         # previous state is the state of previous decoder
                         previous_state = decode_state

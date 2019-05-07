@@ -6,8 +6,9 @@ import json
 import logging
 import sys
 import unicodedata
-
+import pandas as pd
 import nltk
+import os
 import numpy as np
 
 logger = logging.getLogger('mylogger')
@@ -23,7 +24,67 @@ InputData = collections.namedtuple('InputData', ['input_sentence_length',
                                                  'all_triples'])
 
 
-class Data:
+class DataGenerator:
+    def __init__(self, data, batch_size, config, prepare):
+        all_sent_length, all_sent_id, all_triples_id = data
+        self.all_sent_length = all_sent_length
+        self.all_sent_id = all_sent_id
+        self.all_triples_id = all_triples_id
+        self.batch_size = batch_size
+        self.config = config
+        self.prepare = prepare
+        self.instance_number = len(all_sent_length)
+        self.start_point = 0
+        self.indexes = list(range(self.instance_number))
+        self.batch_number = int(self.instance_number / self.batch_size)
+        if self.instance_number % self.batch_size != 0:
+            self.batch_number += 1
+
+    def next_batch(self, is_random=True):
+        if self.start_point == 0:
+            self.indexes = list(range(self.instance_number))
+            if is_random:
+                np.random.shuffle(self.indexes)
+        end_point = self.start_point + self.batch_size
+        if end_point > self.instance_number:
+            end_point = -1
+        batch_sent_length = []
+        batch_sent_id = []
+        batch_triples_id = []
+        for idx in self.indexes[self.start_point: end_point]:
+            batch_sent_length.append(self.all_sent_length[idx])
+            batch_sent_id.append(self.all_sent_id[idx])
+            batch_triples_id.append(self.all_triples_id[idx])
+        processed_data = self.prepare.process(
+            [batch_sent_length, batch_sent_id, batch_triples_id])
+        standard_outputs, sentence_length, sentence_fw, sentence_bw, sentence_pos_fw, sentence_pos_bw,\
+        input_sentence_append_eos, relations_append_eos, all_triples_id = processed_data
+        self.start_point = end_point if end_point != -1 else 0
+        standard_outputs = np.asanyarray(standard_outputs)
+        all_triples_id = np.asanyarray(all_triples_id)  # gold triples without padding
+        sentence_length = np.asanyarray(sentence_length)
+        sentence_fw = np.asanyarray(sentence_fw)
+        sentence_bw = np.asanyarray(sentence_bw)
+        sentence_pos_fw = np.asanyarray(sentence_pos_fw)
+        sentence_pos_bw = np.asanyarray(sentence_pos_bw)
+        input_sentence_append_eos = np.asanyarray(input_sentence_append_eos)
+        relations_append_eos = np.asanyarray(relations_append_eos)
+        batch_data = InputData(input_sentence_length=sentence_length,
+                               sentence_fw=sentence_fw,
+                               sentence_bw=sentence_bw,
+                               sentence_pos_fw=sentence_pos_fw,
+                               sentence_pos_bw=sentence_pos_bw,
+                               standard_outputs=standard_outputs,
+                               input_sentence_append_eos=input_sentence_append_eos,
+                               relations_append_eos=relations_append_eos,
+                               all_triples=all_triples_id)
+        return batch_data
+
+
+
+
+
+class Data_:
     def __init__(self, data, batch_size, config):
         standard_outputs, sentence_length, sentence_fw, sentence_bw, sentence_pos_fw, sentence_pos_bw, input_sentence_append_eos, relations_append_eos, all_triples_id = data
         self.standard_outputs = np.asanyarray(standard_outputs)
@@ -48,6 +109,7 @@ class Data:
             indexes = self.next_sequence_indexes()
         all_triples = self.all_triples_id[indexes]
         standard_outputs = self.standard_outputs[indexes]
+        print('DATA INDEX')
         batch_data = InputData(input_sentence_length=self.sentence_length[indexes],
                                sentence_fw=self.sentence_fw[indexes],
                                sentence_bw=self.sentence_bw[indexes],
@@ -62,7 +124,8 @@ class Data:
     #   select data in sequence, mainly for test
     def next_sequence_indexes(self):
         if self.batch_index < self.batch_number:
-            indexes = np.asanyarray(list(range(self.batch_size * self.batch_index, (self.batch_index + 1) * self.batch_size)))
+            indexes = np.asanyarray(
+                list(range(self.batch_size * self.batch_index, (self.batch_index + 1) * self.batch_size)))
             self.batch_index += 1
             return indexes
         else:
@@ -73,6 +136,7 @@ class Data:
 
     # randomly select a batch of data, only for train
     def next_random_indexes(self):
+        print('NEXT RANDOM')
         return np.random.choice(list(range(self.instance_number)), self.batch_size)
 
 
@@ -111,6 +175,38 @@ def append_eos2sentence(sent_index, config):
 def padding_triples(all_triples_id, config):
     all_triples_id = [padding_a_triples(triples, config) for triples in all_triples_id]
     return all_triples_id
+
+
+def padding_triples_pointer(all_triples_id, config):
+    all_triples_id = [padding_a_triples_pointer(triples, config) for triples in all_triples_id]
+    return all_triples_id
+
+
+def padding_a_triples_pointer(triples, config):
+    """
+    Pad triples to given length
+    If the given triples is over length, then, randomly select some of it's triples
+    :param triples:
+    :return: padded triples
+    """
+    triple_list = triples[:]
+    max_length = config.decoder_output_max_length
+    triples = [[triple_list[5 * i], triple_list[5 * i + 1], triple_list[5 * i + 2], triple_list[5 * i + 3],
+                triple_list[5 * i + 4]] for i in
+               range(len(triple_list) // 5)]
+    np.random.shuffle(triples)
+    padded = []
+    for t in triples:
+        padded.extend(t)
+
+    if len(triple_list) >= max_length:
+        padded = padded[: max_length]
+    else:
+        pad_triple = list(config.NA_TRIPLE)
+        for _ in range((max_length - len(triple_list)) // 5):
+            padded.extend(pad_triple)
+    assert len(padded) == max_length
+    return padded
 
 
 def padding_a_triples(triples, config):
@@ -157,11 +253,25 @@ def change2relation_first(triples):
     new_triples = []
     for t in triples:
         new = []
-        for i in range(len(t) / 3):
+        for i in range(len(t) // 3):
             new_t = [t[3 * i + 2], t[3 * i], t[3 * i + 1]]
             new.extend(new_t)
         new_triples.append(new)
         triple_count += len(t) / 3
+    logger.info('Gold triple number %d' % triple_count)
+    return new_triples
+
+
+def change2relation_first_pointer(triples):
+    triple_count = 0
+    new_triples = []
+    for t in triples:
+        new = []
+        for i in range(len(t) // 5):
+            new_t = [t[5 * i + 4], t[5 * i], t[5 * i + 1], t[5 * i + 2], t[5 * i + 3]]
+            new.extend(new_t)
+        new_triples.append(new)
+        triple_count += len(t) / 5
     logger.info('Gold triple number %d' % triple_count)
     return new_triples
 
@@ -193,10 +303,10 @@ def is_normal_triple(triples, is_relation_first=False):
     """
     entities = set()
     for i, e in enumerate(triples):
-        key = 0 if is_relation_first else 2
-        if i % 3 != key:
+        key = 0 if is_relation_first else 4
+        if i % 5 != key:
             entities.add(e)
-    return len(entities) == 2 * len(triples) / 3
+    return len(entities) == 2 * len(triples) / 5
 
 
 def is_multi_label(triples, is_relation_first=False):
@@ -224,9 +334,9 @@ def is_multi_label(triples, is_relation_first=False):
     if is_normal_triple(triples, is_relation_first):
         return False
     if is_relation_first:
-        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) // 3)]
+        entity_pair = [tuple(triples[5 * i + 1: 5 * i + 5]) for i in range(len(triples) // 5)]
     else:
-        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) // 3)]
+        entity_pair = [tuple(triples[5 * i: 5 * i + 4]) for i in range(len(triples) // 5)]
     # if is multi label, then, at least one entity pair appeared more than once
     return len(entity_pair) != len(set(entity_pair))
 
@@ -256,9 +366,9 @@ def is_over_lapping(triples, is_relation_first=False):
     if is_normal_triple(triples, is_relation_first):
         return False
     if is_relation_first:
-        entity_pair = [tuple(triples[3 * i + 1: 3 * i + 3]) for i in range(len(triples) // 3)]
+        entity_pair = [tuple(triples[5 * i + 1: 5 * i + 5]) for i in range(len(triples) // 5)]
     else:
-        entity_pair = [tuple(triples[3 * i: 3 * i + 2]) for i in range(len(triples) // 3)]
+        entity_pair = [tuple(triples[5 * i: 5 * i + 4]) for i in range(len(triples) // 5)]
     # remove the same entity_pair, then, if one entity appear more than once, it's overlapping
     entity_pair = set(entity_pair)
     entities = []
@@ -368,7 +478,7 @@ class NYTPrepare(Prepare):
         assert len(all_sent_length) == len(all_sent_id)
         print('instance number %d/%d' % (len(all_sent_id), len(data)))
         print('triples number max %d, min %d, ave %f' % (
-        max(triples_number), min(triples_number), np.mean(triples_number)))
+            max(triples_number), min(triples_number), np.mean(triples_number)))
 
         return [all_sent_length, all_sent_id, all_triples_id]
 
@@ -419,7 +529,7 @@ class NYTPrepare(Prepare):
             # if is_normal_triple(sent_triples):
             #     print sent_triples
         print('Normal Count %d, Multi label Count %d, Overlapping Count %d' % (
-        normal_count, multi_label_count, over_lapping_count))
+            normal_count, multi_label_count, over_lapping_count))
         print('Normal Rate %f, Multi label Rate %f, Overlapping Rate %f' % \
               (normal_count * 1.0 / len(all_triples_id), multi_label_count * 1.0 / len(all_triples_id),
                over_lapping_count * 1.0 / len(all_triples_id)))
@@ -460,5 +570,67 @@ class WebNLGPrepare(Prepare):
                 [None] * len(sentence_fw), input_sentence_append_eos, relations_append_eos, all_triples_id]
 
 
-if __name__ == '__main__':
-    pass
+class KGPrepare(Prepare):
+
+    def create_vocab(self, train_texts):
+        from collections import Counter
+        text = ''.join(train_texts)
+        ctr = Counter(text).most_common()
+        vocab = ['[PAD]', '[UNK]']
+        for v, cnt in ctr:
+            if cnt < 10:
+                break
+            vocab.append(v)
+        words2id = {}
+        for i, v in enumerate(vocab):
+            words2id[v] = i
+        json.dump(words2id, open(self.config.words2id_filename, 'w'), ensure_ascii=False)
+        return words2id
+
+    @staticmethod
+    def turn2id(texts, spo, words2id, reverse=False):
+        all_sent_id = []
+        all_triples_id = []
+        all_sent_length = []
+        for i in range(len(texts)):
+            text = texts[i]
+            tri = json.loads(spo[i])
+            sent_length = len(text)
+            sent_id = []
+            triples_id = []
+            for word in list(text):
+                sent_id.append(words2id.get(word, words2id['[UNK]']))
+            for t in tri:
+                triples_id.append([t[2], t[0][0], t[0][1], t[1][0], t[1][1]])
+            triples_id = sorted(triples_id, key=lambda x: (x[1], x[2], x[3], x[4], x[0]), reverse=reverse)
+            from functools import reduce
+            triples_id_ = reduce(lambda x, y: x + y, triples_id) if len(triples_id) > 0 else []
+            all_sent_length.append(sent_length)
+            all_triples_id.append(triples_id_)
+            all_sent_id.append(sent_id)
+        return [all_sent_length, all_sent_id, all_triples_id]
+
+    def prepare(self):
+        data_path = '../scripts/'
+        train_df = pd.read_csv(os.path.join(data_path, 'train.csv'))
+        dev_df = pd.read_csv(os.path.join(data_path, 'dev.csv'))
+        test_df = pd.read_csv(os.path.join(data_path, 'test.csv'))
+        words2id = self.create_vocab(train_df['text'].values)
+        dev_data = self.turn2id(dev_df['text'].values, dev_df['spo'].values, words2id)
+        train_data = self.turn2id(train_df['text'].values, train_df['spo'].values, words2id)
+        test_data = self.turn2id(test_df['text'].values, test_df['spo'].values, words2id)
+        json.dump(train_data, open(self.config.train_filename, 'w'))
+        json.dump(dev_data, open(self.config.valid_filename, 'w'))
+        json.dump(test_data, open(self.config.test_filename, 'w'))
+
+    def process(self, data):
+        all_sent_length, all_sent_id, all_triples_id = data
+        all_triples_id = change2relation_first_pointer(all_triples_id)
+        standard_outputs = padding_triples_pointer(all_triples_id, self.config)
+        sentence_length = all_sent_length
+        sentence_fw = padding_sentence(all_sent_id, self.config)
+        sentence_bw = padding_sentence(inverse(all_sent_id), self.config)
+        input_sentence_append_eos = append_eos2sentence(sentence_fw, self.config)
+        relations_append_eos = append_eos2relations(len(sentence_fw), self.config)
+        return [standard_outputs, sentence_length, sentence_fw, sentence_bw, [None] * len(sentence_fw),
+                [None] * len(sentence_fw), input_sentence_append_eos, relations_append_eos, all_triples_id]

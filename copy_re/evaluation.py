@@ -75,7 +75,7 @@ def _triplelist2triples_(triple_list, config):
      {(1,2,3),(2,5,0)}
     """
     triple_list = list(triple_list)
-    triples = set([tuple(triple_list[i:i + 3]) for i in range(0, len(triple_list), 3)])
+    triples = set([tuple(triple_list[i:i + 5]) for i in range(0, len(triple_list), 5)])
     if config.NA_TRIPLE in triples:
         triples.remove(config.NA_TRIPLE)
     return triples
@@ -180,22 +180,22 @@ def sent_id2sent_str(sent_id, id2words):
 
 
 def triple_id2triple_str(triple_id, sent_id, id2words, id2relations, is_relation_first, config):
-    assert len(triple_id) == 3
+    assert len(triple_id) == 5
     entity_1_str, entity_2_str, relation_str = 'None', 'None', 'None'
     if is_relation_first:
-        r_id, e_1_position_id, e_2_position_id = triple_id[0], triple_id[1], triple_id[2]
+        r_id, e1_s, e1_e, e2_s, e2_e = triple_id[0], triple_id[1], triple_id[2], triple_id[3], triple_id[4]
     else:
-        r_id, e_1_position_id, e_2_position_id = triple_id[2], triple_id[0], triple_id[1]
-    if e_1_position_id < config.max_sentence_length:
+        r_id, e1_s, e1_e, e2_s, e2_e = triple_id[4], triple_id[0], triple_id[1], triple_id[2], triple_id[3]
+    if e1_e < config.max_sentence_length:
         try:
-            entity_1_str = id2words[sent_id[e_1_position_id]]
+            entity_1_str = ''.join([id2words[wid] for wid in sent_id[e1_s: e1_e+1]])
         except:
-            entity_1_str = 'None-%s-%s' % (e_1_position_id, sent_id[e_1_position_id])
-    if e_2_position_id < config.max_sentence_length:
+            entity_1_str = 'None-%s-%s' % (e1_s, sent_id[e1_s])
+    if e2_s < config.max_sentence_length:
         try:
-            entity_2_str = id2words[sent_id[e_2_position_id]]
+            entity_2_str = id2words[sent_id[e2_s]]
         except:
-            entity_2_str = 'None-%s-%s' % (e_1_position_id, sent_id[e_1_position_id])
+            entity_2_str = 'None-%s-%s' % (e1_s, sent_id[e1_s])
     if r_id < config.relation_number:
         try:
             relation_str = id2relations[r_id]

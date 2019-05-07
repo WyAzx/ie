@@ -12,6 +12,7 @@ class DataSet():
     NYT = 'nyt'
     CONLL04 = 'conll04'
     WEBNLG = 'webnlg'
+    KG = 'kg'
     name = None
 
     @staticmethod
@@ -20,6 +21,8 @@ class DataSet():
             DataSet.name = DataSet.NYT
         elif dataset_name == DataSet.WEBNLG:
             DataSet.name = DataSet.WEBNLG
+        elif dataset_name == DataSet.KG:
+            DataSet.name = DataSet.KG
         else:
             print('Dataset %s is not exist!!!!!!!!!! ' % dataset_name)
             exit()
@@ -40,7 +43,7 @@ class DecoderMethod:
 
 class Config:
     def __init__(self, config_filename=None, cell_name='lstm'):
-        home = '/home/sunder/'
+        home = ''
         if config_filename is not None:
             print('config filename: %s' % config_filename)
             cfg = json.load(open(config_filename, 'r'))
@@ -54,7 +57,7 @@ class Config:
             self.cell_name = cell_name
             self.learning_rate = cfg["learning_rate"]
             self.batch_size = cfg["batch_size"]
-            self.decoder_output_max_length = self.triple_number * 3
+            self.decoder_output_max_length = self.triple_number * 5
             self.dataset_name = cfg["dataset"].lower()
             self.exp_name = cfg["exp_name"]
             DataSet.set_dataset(self.dataset_name)
@@ -68,7 +71,19 @@ class Config:
             raise ValueError
 
         data_home = os.path.join(home, 'data', DataSet.name)
-        if DataSet.name == DataSet.NYT:
+        if DataSet.name == DataSet.KG:
+            self.words_number = 4888
+            self.embedding_dim = 100
+            self.relation_number = 49
+            self.max_sentence_length = 300
+            self.words2id_filename = os.path.join(data_home, 'words2id.json')
+            self.relations2id_filename = os.path.join(data_home, 'relations2id.json')
+            self.words_id2vector_filename = os.path.join(data_home, 'words_id2vector.json')
+            self.train_filename = os.path.join(data_home, 'train.json')
+            self.test_filename = os.path.join(data_home, 'test.json')
+            self.valid_filename = os.path.join(data_home, 'valid.json')
+            self.summary_filename = os.path.join(self.runner_path, 'seq2seq_re_graph')
+        elif DataSet.name == DataSet.NYT:
             self.words_number = 90760
             self.embedding_dim = 100
             self.relation_number = 25
@@ -84,7 +99,7 @@ class Config:
             self.test_filename = os.path.join(data_home, 'seq2seq_re/test.json')
             self.valid_filename = os.path.join(data_home, 'seq2seq_re/valid.json')
             self.summary_filename = os.path.join(self.runner_path, 'seq2seq_re_graph')
-        if DataSet.name == DataSet.WEBNLG:
+        elif DataSet.name == DataSet.WEBNLG:
             self.words_number = 5928
             self.embedding_dim = 100
             self.relation_number = 247
@@ -98,4 +113,8 @@ class Config:
             self.valid_filename = os.path.join(data_home, 'valid.json')
             self.summary_filename = os.path.join(self.runner_path, 'seq2seq_re_graph')
 
-        self.NA_TRIPLE = (self.relation_number, self.max_sentence_length, self.max_sentence_length)
+        # self.NA_TRIPLE = (self.relation_number, self.max_sentence_length, self.max_sentence_length)
+        # FOR OUR
+        self.NA_TRIPLE = (
+            self.relation_number, self.max_sentence_length, self.max_sentence_length, self.max_sentence_length,
+            self.max_sentence_length)
